@@ -53,8 +53,16 @@ def libDir = layout.projectDirectory.file("lib")
 def apiDocsDir = layout.projectDirectory.file("docs/api")
 def archapplsite = System.getenv("ARCHAPPL_SITEID") ?: "tests"
 def defaultsitespecificpath = "src/sitespecific/${archapplsite}"
+
 // Allow the site to be outside of the repository
-def sitespecificpath = (new File("${defaultsitespecificpath}").exists()) ? defaultsitespecificpath : archapplsite
+def sitespecificpath = file(defaultsitespecificpath).exists() ? defaultsitespecificpath : archapplsite
+
+// Variables for auto deployment in VM
+def userName = "userName"		// your VM user name
+def hostName = "hostName"		// your host name such as localhost
+def port = "1234"				// your forwarding port for scp
+def warFiles = ['engine', 'etl', 'retrieval', 'mgmt']		// generated .war files name
+def targetDir = "/opt/archiver-appliance/instances"			// directory where the 4 instances are stored
 
 ant.stage = stageDir
 ant.archapplsite = archapplsite
@@ -137,7 +145,6 @@ dependencies {
 	testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.2.0")
 	testImplementation('org.awaitility:awaitility:4.2.0')
 	implementation("org.phoebus:core-pva:4.7.2")
-    runtimeOnly("org.mariadb.jdbc:mariadb-java-client:3.1.4")
 }
 
 tasks.register("cleanApiDocs", Delete) {
@@ -295,7 +302,7 @@ tasks.withType(War).configureEach {
 
 tasks.register("mgmtWar", War) {
 	group = "Wars"
-	dependsOn "sphinx"
+	// dependsOn "sphinx"
 	from("${stageDir}/org/epics/archiverappliance/mgmt/staticcontent") {
 		into "ui"
 	}
@@ -348,7 +355,7 @@ tasks.register("engineWar", War) {
 	webXml = file("${srcDir}/org/epics/archiverappliance/engine/WEB-INF/web.xml")
 }
 
-tasks.register("retreivalWar", War) {
+tasks.register("retrievalWar", War) {
 	group = "Wars"
 	dependsOn "stageSvgViewer"
 	from("${stageDir}/org/epics/archiverappliance/retrieval/staticcontent") {
@@ -363,7 +370,7 @@ tasks.register("buildRelease", Tar) {
 	group = "Wars"
 	description = "Builds a full release and zips up in a tar file."
 	dependsOn "mgmtWar"
-	dependsOn "retreivalWar"
+	dependsOn "retrievalWar"
 	dependsOn "etlWar"
 	dependsOn "engineWar"
 	dependsOn "generateReleaseNotes"
@@ -410,8 +417,29 @@ war {
 	dependsOn "buildRelease"
 }
 
-assemble {
+tasks.register("deployWars") {
+	group = "Wars"
+	description = "Auto deploy wars file in the VM"
 	dependsOn "buildRelease"
+    doLast {
+        warFiles.each { warFile ->
+        	def source = "${projectDir}/build/libs/${warFile}.war"
+        	def target = "${userName}@${hostName}:${targetDir}/${warFile}/webapps/"
+        	println "Transferring ${warFile}.war to ${target}"
+        	try {
+	            exec {
+	                commandLine 'scp', '-P', port, source, target
+	            }
+	            println "Successfully transferred ${warFile}.war !"
+	    	} catch(Exception e) {
+	    		println "Failed to transfer ${warFile}.war: ${e.message}"
+	    	}
+        }
+    }
+}
+
+assemble {
+	dependsOn "buildRelease", "deployWars"
 }
 
 tasks.withType(Test).configureEach {
